@@ -1,0 +1,217 @@
+/*
+QuPath script to apply various auto-threshold methods from ImageJ on annotations.
+
+This script has been optimised to apply auto-thresholding on the histogram from pixels strictly within the annotation ROI, instead of the bounding box.
+
+Note that there are two different downsample parameters to set.
+ * "thresholdDownsample" determines the downsample factor for the image and pixels that are used to calculate the threshold value from the histogram. This is useful to adjust if you have a very large annotation, which you should use a larger downsample factor.
+ * "classifierDownsample" determines the downsample factor for the objects that are to be created. This is useful to adjust depending on the size/complexity of the resulting object ROI.
+
+@author Yau Mun Lim @yau-lim (2023)
+*/
+
+
+import qupath.lib.images.servers.TransformedServerBuilder
+import qupath.lib.roi.interfaces.ROI
+import qupath.imagej.tools.IJTools
+import qupath.lib.images.PathImage
+import qupath.lib.regions.RegionRequest
+import ij.ImagePlus
+import ij.process.ImageProcessor
+import qupath.opencv.ml.pixel.PixelClassifiers
+import qupath.lib.images.servers.ColorTransforms.ColorTransform
+import qupath.opencv.ops.ImageOp
+import qupath.opencv.ops.ImageOps
+
+/* PARAMETERS */
+String channel = "Average" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
+double thresholdDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
+String thresholdMethod = "Triangle" // "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
+def thresholdFloor = null // Set a threshold floor value in case auto threshold is too low. Set null to disable
+String output = "threshold value" // "annotation", "detection", "measurement", "threshold value"
+
+double classifierDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
+double classifierGaussianSigma = 0.5 // Strength of gaussian blurring for pixel classifier (not used in calculation of threshold)
+String classBelow = null // null or "Class Name"; use this for positive "Average" channel on brightfield
+String classAbove = "Positive" // null or "Class Name"; use this for positive deconvoluted or fluorescence channels
+
+/* Create object parameters */
+double minArea = 0 // Minimum area for annotations to be created
+double minHoleArea = 0 // Minimum area for holes in annotations to be created
+String classifierObjectOptions = "" // "SPLIT,DELETE_EXISTING,INCLUDE_IGNORED,SELECT_NEW"
+
+
+def annotations = getSelectedObjects().findAll{it.getPathClass() != getPathClass("Ignore*")}
+
+if (annotations) {
+    annotations.forEach{ anno ->
+        autoThreshold(anno, channel, thresholdDownsample, thresholdMethod, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) 
+    }
+} else {
+    logger.warn("No annotations selected.")
+}
+
+
+
+/* FUNCTIONS */
+def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
+    def imageData = getCurrentImageData()
+    def imageType = imageData.getImageType()
+    def server = imageData.getServer()
+    def cal = server.getPixelCalibration()
+
+    if (imageType.toString().contains("Brightfield")) {
+        def stains = imageData.getColorDeconvolutionStains()
+
+        def classifierChannel
+        if (channel == "HTX") {
+            server = new TransformedServerBuilder(server).deconvolveStains(stains, 1).build()
+            classifierChannel = ColorTransforms.createColorDeconvolvedChannel(stains, 1)
+        } else if (channel == "DAB") {
+            server = new TransformedServerBuilder(server).deconvolveStains(stains, 2).build()
+            classifierChannel = ColorTransforms.createColorDeconvolvedChannel(stains, 2)
+        } else if (channel == "Residual") {
+            server = new TransformedServerBuilder(server).deconvolveStains(stains, 3).build()
+            classifierChannel = ColorTransforms.createColorDeconvolvedChannel(stains, 3)
+        } else if (channel == "Average") {
+            server = new TransformedServerBuilder(server).averageChannelProject().build()
+            classifierChannel = ColorTransforms.createMeanChannelTransform()
+        }
+    } else if (imageType.toString() == "Fluorescence") {
+        if (channel == "Average") {
+            server = new TransformedServerBuilder(server).averageChannelProject().build()
+            classifierChannel = ColorTransforms.createMeanChannelTransform()
+        } else {
+            server = new TransformedServerBuilder(server).extractChannels(channel).build()
+            classifierChannel = ColorTransforms.createChannelExtractor(channel)
+        }
+    }
+
+
+    // Determine threshold value
+    logger.info("Calculating threshold value using ${thresholdMethod} method on ${annotation}")
+    ROI pathROI = annotation.getROI() // Get QuPath ROI
+    PathImage pathImage = IJTools.convertToImagePlus(server, RegionRequest.createInstance(server.getPath(), thresholdDownsample, pathROI)) // Get PathImage within bounding box of annotation
+    def ijRoi = IJTools.convertToIJRoi(pathROI, pathImage) // Convert QuPath ROI into ImageJ ROI
+    ImagePlus imagePlus = pathImage.getImage() // Convert PathImage into ImagePlus
+    // pathImage.getImage().show() // Show image used for histogram
+    ImageProcessor ip = imagePlus.getProcessor() // Get ImageProcessor from ImagePlus
+    ip.setRoi(ijRoi) // Add ImageJ ROI to the ImageProcessor to limit the histogram to within the ROI only
+
+    // Apply the selected algorithm
+    def validThresholds = ["Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"]
+
+    if (thresholdMethod in validThresholds){
+        ip.setAutoThreshold(thresholdMethod)
+    } else {
+        logger.error("Invalid auto-threshold method")
+        return
+    }
+
+    double thresholdValue = ip.getMaxThreshold()
+    if (thresholdValue != null && thresholdValue < thresholdFloor) {
+        thresholdValue = thresholdFloor
+    }
+
+    // If specified output is "threshold value, return threshold value in annotation measurements
+    if (output == "threshold value") {
+        logger.info("${thresholdMethod} threshold value: ${thresholdValue}")
+        annotation.measurements.put("${thresholdMethod} threshold value", thresholdValue)
+        return
+    }
+
+    // Define parameters for pixel classifier
+    def resolution = cal.createScaledInstance(classifierDownsample, classifierDownsample)
+    
+    def prefilter = ImageOps.Filters.gaussianBlur(classifierGaussianSigma)
+
+    List<ImageOp> ops = new ArrayList<>()
+    ops.add(prefilter)
+    ops.add(ImageOps.Threshold.threshold(thresholdValue))
+
+    // Assign classification
+    def classificationBelow
+    if (classBelow instanceof PathClass) {
+        classificationBelow = classBelow
+    } else if (classBelow instanceof String) {
+        classificationBelow = getPathClass(classBelow)
+    } else if (classBelow == null) {
+        classificationBelow = classBelow
+    }
+    
+    def classificationAbove
+    if (classAbove instanceof PathClass) {
+        classificationAbove = classAbove
+    } else if (classAbove instanceof String) {
+        classificationAbove = getPathClass(classAbove)
+    } else if (classAbove == null) {
+        classificationAbove = classAbove
+    }
+
+    Map<Integer, PathClass> classifications = new LinkedHashMap<>()
+    classifications.put(0, classificationBelow)
+    classifications.put(1, classificationAbove)
+
+    // Create pixel classifier
+    def op = ImageOps.Core.sequential(ops)
+    def transformer = ImageOps.buildImageDataOp(classifierChannel).appendOps(op)
+    def classifier = PixelClassifiers.createClassifier(
+        transformer,
+        resolution,
+        classifications
+    )
+
+    // Apply classifier
+    selectObjects(annotation)
+    if (output == "annotation") {
+        logger.info("Creating annotations in ${annotation} from ${thresholdMethod}: ${thresholdValue}")
+        
+        if (classifierObjectOptions) {
+            classifierObjectOptions = classifierObjectOptions.split(',')
+            def allowedOptions = ["SPLIT", "DELETE_EXISTING", "INCLUDE_IGNORED", "SELECT_NEW"]
+            boolean checkValid = classifierObjectOptions.every{allowedOptions.contains(it)}
+
+            if (checkValid) {
+                createAnnotationsFromPixelClassifier(classifier, minArea, minHoleArea, classifierObjectOptions)
+            } else {
+                logger.warn("Invalid create annotation options")
+                return
+            }
+        } else {
+            createAnnotationsFromPixelClassifier(classifier, minArea, minHoleArea)
+        }
+    }
+    if (output == "detection") {
+        logger.info("Creating detections in ${annotation} from ${thresholdMethod}: ${thresholdValue}")
+
+        if (classifierObjectOptions) {
+            classifierObjectOptions = classifierObjectOptions.split(',')
+            def allowedOptions = ["SPLIT", "DELETE_EXISTING", "INCLUDE_IGNORED", "SELECT_NEW"]
+            boolean checkValid = classifierObjectOptions.every{allowedOptions.contains(it)}
+
+            if (checkValid) {
+                createDetectionsFromPixelClassifier(classifier, minArea, minHoleArea, classifierObjectOptions)
+            } else {
+                logger.warn("Invalid create detection options")
+                return
+            }
+        } else {
+            createDetectionsFromPixelClassifier(classifier, minArea, minHoleArea)
+        }
+    }
+    if (output == "measurement") {
+        logger.info("Measuring thresholded area in ${annotation} from ${thresholdMethod}: ${thresholdValue}")
+        def measurementID = "${thresholdMethod} threshold"
+        addPixelClassifierMeasurements(classifier, measurementID)
+    }
+    
+    if (classificationBelow == null) {
+        annotation.measurements.put("${thresholdMethod}: ${classificationAbove.toString()} threshold value", thresholdValue)
+    }
+    if (classificationAbove == null) {
+        annotation.measurements.put("${thresholdMethod}: ${classificationBelow.toString()} threshold value", thresholdValue)
+    }
+    if (classificationBelow != null && classificationAbove != null) {
+        annotation.measurements.put("${thresholdMethod} threshold value", thresholdValue)
+    }
+}
