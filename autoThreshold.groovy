@@ -91,6 +91,9 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
             server = new TransformedServerBuilder(server).extractChannels(channel).build()
             classifierChannel = ColorTransforms.createChannelExtractor(channel)
         }
+    } else {
+        logger.error("Current image type not compatible with auto threshold.")
+        return
     }
 
 
