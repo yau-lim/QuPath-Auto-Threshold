@@ -65,11 +65,11 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
     def imageType = imageData.getImageType()
     def server = imageData.getServer()
     def cal = server.getPixelCalibration()
+    def classifierChannel
 
     if (imageType.toString().contains("Brightfield")) {
         def stains = imageData.getColorDeconvolutionStains()
 
-        def classifierChannel
         if (channel == "HTX") {
             server = new TransformedServerBuilder(server).deconvolveStains(stains, 1).build()
             classifierChannel = ColorTransforms.createColorDeconvolvedChannel(stains, 1)
