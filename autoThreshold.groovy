@@ -9,11 +9,12 @@ Note that there are two different downsample parameters to set.
 
 You can choose the desired output:
  * "threshold value" for just saving the threshold value to manually check the results without creating objects.
+ * "preview" to show the thresholded area as an overlay (experimental feature).
  * "measurement" to save the thresholded area as a measurement in the parent annotation.
  * "annotation" to save the thresholded area as an annotation, making use of the classifier object options.
  * "detection" to save the thresholded area as a detection, making use of the classifier object options.
 
-@author Yau Mun Lim @yau-lim (2023)
+@author Yau Mun Lim @yau-lim (2024)
 */
 
 
@@ -25,16 +26,21 @@ import qupath.lib.regions.RegionRequest
 import ij.ImagePlus
 import ij.process.ImageProcessor
 import qupath.opencv.ml.pixel.PixelClassifiers
+import qupath.lib.gui.viewer.OverlayOptions
+import qupath.lib.gui.viewer.RegionFilter
+import qupath.lib.gui.viewer.overlays.PixelClassificationOverlay
 import qupath.lib.images.servers.ColorTransforms.ColorTransform
 import qupath.opencv.ops.ImageOp
 import qupath.opencv.ops.ImageOps
 
 /* PARAMETERS */
-String channel = "Average" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
+String channel = "DAB" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
 double thresholdDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
 String thresholdMethod = "Triangle" // "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
+boolean darkBackground = false // Adapt threshold method for dark backgrounds
 def thresholdFloor = null // Set a threshold floor value in case auto threshold is too low. Set null to disable
-String output = "threshold value" // "annotation", "detection", "measurement", "threshold value"
+String output = "preview" // "annotation", "detection", "measurement", "preview", "threshold value"
+// Reset preview overlay with "getQuPath().getViewer().resetCustomPixelLayerOverlay()"
 
 double classifierDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
 double classifierGaussianSigma = 0.5 // Strength of gaussian blurring for pixel classifier (not used in calculation of threshold)
@@ -51,7 +57,7 @@ def annotations = getSelectedObjects().findAll{it.getPathClass() != getPathClass
 
 if (annotations) {
     annotations.forEach{ anno ->
-        autoThreshold(anno, channel, thresholdDownsample, thresholdMethod, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) 
+        autoThreshold(anno, channel, thresholdDownsample, thresholdMethod, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions)
     }
 } else {
     logger.warn("No annotations selected.")
@@ -60,7 +66,8 @@ if (annotations) {
 
 
 /* FUNCTIONS */
-def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
+def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
+    def qupath = getQuPath()
     def imageData = getCurrentImageData()
     def imageType = imageData.getImageType()
     def server = imageData.getServer()
@@ -103,7 +110,6 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
     PathImage pathImage = IJTools.convertToImagePlus(server, RegionRequest.createInstance(server.getPath(), thresholdDownsample, pathROI)) // Get PathImage within bounding box of annotation
     def ijRoi = IJTools.convertToIJRoi(pathROI, pathImage) // Convert QuPath ROI into ImageJ ROI
     ImagePlus imagePlus = pathImage.getImage() // Convert PathImage into ImagePlus
-    // pathImage.getImage().show() // Show image used for histogram
     ImageProcessor ip = imagePlus.getProcessor() // Get ImageProcessor from ImagePlus
     ip.setRoi(ijRoi) // Add ImageJ ROI to the ImageProcessor to limit the histogram to within the ROI only
 
@@ -111,7 +117,11 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
     def validThresholds = ["Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"]
 
     if (thresholdMethod in validThresholds){
-        ip.setAutoThreshold(thresholdMethod)
+        if (darkBackground) {
+            ip.setAutoThreshold("${thresholdMethod} dark")
+        } else {
+            ip.setAutoThreshold("${thresholdMethod}")
+        }
     } else {
         logger.error("Invalid auto-threshold method")
         return
@@ -131,11 +141,9 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
 
     // Define parameters for pixel classifier
     def resolution = cal.createScaledInstance(classifierDownsample, classifierDownsample)
-    
-    def prefilter = ImageOps.Filters.gaussianBlur(classifierGaussianSigma)
 
     List<ImageOp> ops = new ArrayList<>()
-    ops.add(prefilter)
+    ops.add(ImageOps.Filters.gaussianBlur(classifierGaussianSigma))
     ops.add(ImageOps.Threshold.threshold(thresholdValue))
 
     // Assign classification
@@ -212,6 +220,14 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, thr
         logger.info("Measuring thresholded area in ${annotation} from ${thresholdMethod}: ${thresholdValue}")
         def measurementID = "${thresholdMethod} threshold"
         addPixelClassifierMeasurements(classifier, measurementID)
+    }
+    if (output == "preview") {
+        logger.info("Showing preview of ${annotation} with ${thresholdMethod}: ${thresholdValue}")
+        OverlayOptions overlayOption = qupath.getOverlayOptions()
+        overlayOption.setPixelClassificationRegionFilter(RegionFilter.StandardRegionFilters.ANY_ANNOTATIONS) // RegionFilter.StandardRegionFilters.ANY_ANNOTATIONS
+        PixelClassificationOverlay previewOverlay = PixelClassificationOverlay.create(overlayOption, classifier)
+        previewOverlay.setLivePrediction(true)
+        qupath.getViewer().setCustomPixelLayerOverlay(previewOverlay)
     }
     
     if (classificationBelow == null) {
