@@ -1,6 +1,6 @@
 QuPath script to apply various auto-threshold methods from ImageJ on annotations.
-This is useful for applying auto-thresholding on a large batch of images by scripting.
-A GUI version developed by @iviecomarti based on this script is available at https://github.com/iviecomarti/GUI_AutoTH_QuPath
+
+This is useful for applying auto-thresholding on a large batch of images by scripting. A GUI version developed by @iviecomarti based on this script is available at https://github.com/iviecomarti/GUI_AutoTH_QuPath
 
 This script has been optimised to apply auto-thresholding on the histogram from pixels strictly within the annotation ROI, instead of the bounding box.
 
