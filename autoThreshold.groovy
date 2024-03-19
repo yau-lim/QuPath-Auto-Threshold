@@ -17,22 +17,6 @@ You can choose the desired output:
 @author Yau Mun Lim @yau-lim (2024)
 */
 
-
-import qupath.lib.images.servers.TransformedServerBuilder
-import qupath.lib.roi.interfaces.ROI
-import qupath.imagej.tools.IJTools
-import qupath.lib.images.PathImage
-import qupath.lib.regions.RegionRequest
-import ij.ImagePlus
-import ij.process.ImageProcessor
-import qupath.opencv.ml.pixel.PixelClassifiers
-import qupath.lib.gui.viewer.OverlayOptions
-import qupath.lib.gui.viewer.RegionFilter
-import qupath.lib.gui.viewer.overlays.PixelClassificationOverlay
-import qupath.lib.images.servers.ColorTransforms.ColorTransform
-import qupath.opencv.ops.ImageOp
-import qupath.opencv.ops.ImageOps
-
 /* PARAMETERS */
 String channel = "DAB" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
 double thresholdDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
@@ -63,7 +47,21 @@ if (annotations) {
     logger.warn("No annotations selected.")
 }
 
-
+/* IMPORTS */
+import qupath.lib.images.servers.TransformedServerBuilder
+import qupath.lib.roi.interfaces.ROI
+import qupath.imagej.tools.IJTools
+import qupath.lib.images.PathImage
+import qupath.lib.regions.RegionRequest
+import ij.ImagePlus
+import ij.process.ImageProcessor
+import qupath.opencv.ml.pixel.PixelClassifiers
+import qupath.lib.gui.viewer.OverlayOptions
+import qupath.lib.gui.viewer.RegionFilter
+import qupath.lib.gui.viewer.overlays.PixelClassificationOverlay
+import qupath.lib.images.servers.ColorTransforms.ColorTransform
+import qupath.opencv.ops.ImageOp
+import qupath.opencv.ops.ImageOps
 
 /* FUNCTIONS */
 def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
