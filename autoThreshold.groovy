@@ -7,6 +7,10 @@ Note that there are two different downsample parameters to set.
  * "thresholdDownsample" determines the downsample factor for the image and pixels that are used to calculate the threshold value from the histogram. This is useful to adjust if you have a very large annotation, which you should use a larger downsample factor.
  * "classifierDownsample" determines the downsample factor for the objects that are to be created. This is useful to adjust depending on the size/complexity of the resulting object ROI.
 
+Specify the threshold method to use by setting the "threshold" variable.
+ * For fixed threshold, set "threshold" with the desired threshold value.
+ * For auto threshold, set "threshold" with the desired threshold method. The following are available: "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen
+
 You can choose the desired output:
  * "threshold value" for just saving the threshold value to manually check the results without creating objects.
  * "preview" to show the thresholded area as an overlay (experimental feature).
@@ -20,7 +24,7 @@ You can choose the desired output:
 /* PARAMETERS */
 String channel = "DAB" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
 double thresholdDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
-String thresholdMethod = "Triangle" // "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
+def threshold = 0.25 // Input threshold value for fixed threshold. Use the following for auto threshold: "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
 boolean darkBackground = false // Adapt threshold method for dark backgrounds
 def thresholdFloor = null // Set a threshold floor value in case auto threshold is too low. Set null to disable
 String output = "preview" // "annotation", "detection", "measurement", "preview", "threshold value"
@@ -41,7 +45,7 @@ def annotations = getSelectedObjects().findAll{it.getPathClass() != getPathClass
 
 if (annotations) {
     annotations.forEach{ anno ->
-        autoThreshold(anno, channel, thresholdDownsample, thresholdMethod, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions)
+        autoThreshold(anno, channel, thresholdDownsample, threshold, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions)
     }
 } else {
     logger.warn("No annotations selected.")
@@ -64,12 +68,13 @@ import qupath.opencv.ops.ImageOp
 import qupath.opencv.ops.ImageOps
 
 /* FUNCTIONS */
-def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
+def autoThreshold(annotation, channel, thresholdDownsample, threshold, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
     def qupath = getQuPath()
     def imageData = getCurrentImageData()
     def imageType = imageData.getImageType()
     def server = imageData.getServer()
     def cal = server.getPixelCalibration()
+    def resolution = cal.createScaledInstance(classifierDownsample, classifierDownsample)
     def classifierChannel
 
     if (imageType.toString().contains("Brightfield")) {
@@ -101,33 +106,44 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, dar
         return
     }
 
-
-    // Determine threshold value
-    logger.info("Calculating threshold value using ${thresholdMethod} method on ${annotation}")
-    ROI pathROI = annotation.getROI() // Get QuPath ROI
-    PathImage pathImage = IJTools.convertToImagePlus(server, RegionRequest.createInstance(server.getPath(), thresholdDownsample, pathROI)) // Get PathImage within bounding box of annotation
-    def ijRoi = IJTools.convertToIJRoi(pathROI, pathImage) // Convert QuPath ROI into ImageJ ROI
-    ImagePlus imagePlus = pathImage.getImage() // Convert PathImage into ImagePlus
-    ImageProcessor ip = imagePlus.getProcessor() // Get ImageProcessor from ImagePlus
-    ip.setRoi(ijRoi) // Add ImageJ ROI to the ImageProcessor to limit the histogram to within the ROI only
+    // Check if threshold is Double (for fixed threshold) or String (for auto threshold)
+    String thresholdMethod
+    if (threshold instanceof String) {
+        thresholdMethod = threshold
+    } else {
+        thresholdMethod = "Fixed"
+    }
 
     // Apply the selected algorithm
-    def validThresholds = ["Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"]
+    def validThresholds = ["Fixed", "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"]
 
+    double thresholdValue
     if (thresholdMethod in validThresholds){
-        if (darkBackground) {
-            ip.setAutoThreshold("${thresholdMethod} dark")
+        if (thresholdMethod == "Fixed") {
+            thresholdValue = threshold
         } else {
-            ip.setAutoThreshold("${thresholdMethod}")
+            // Determine threshold value by auto threshold method
+            ROI pathROI = annotation.getROI() // Get QuPath ROI
+            PathImage pathImage = IJTools.convertToImagePlus(server, RegionRequest.createInstance(server.getPath(), thresholdDownsample, pathROI)) // Get PathImage within bounding box of annotation
+            def ijRoi = IJTools.convertToIJRoi(pathROI, pathImage) // Convert QuPath ROI into ImageJ ROI
+            ImagePlus imagePlus = pathImage.getImage() // Convert PathImage into ImagePlus
+            ImageProcessor ip = imagePlus.getProcessor() // Get ImageProcessor from ImagePlus
+            ip.setRoi(ijRoi) // Add ImageJ ROI to the ImageProcessor to limit the histogram to within the ROI only
+
+            if (darkBackground) {
+                ip.setAutoThreshold("${thresholdMethod} dark")
+            } else {
+                ip.setAutoThreshold("${thresholdMethod}")
+            }
+
+            thresholdValue = ip.getMaxThreshold()
+            if (thresholdValue != null && thresholdValue < thresholdFloor) {
+                thresholdValue = thresholdFloor
+            }
         }
     } else {
         logger.error("Invalid auto-threshold method")
         return
-    }
-
-    double thresholdValue = ip.getMaxThreshold()
-    if (thresholdValue != null && thresholdValue < thresholdFloor) {
-        thresholdValue = thresholdFloor
     }
 
     // If specified output is "threshold value, return threshold value in annotation measurements
@@ -136,13 +152,6 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, dar
         annotation.measurements.put("${thresholdMethod} threshold value", thresholdValue)
         return
     }
-
-    // Define parameters for pixel classifier
-    def resolution = cal.createScaledInstance(classifierDownsample, classifierDownsample)
-
-    List<ImageOp> ops = new ArrayList<>()
-    ops.add(ImageOps.Filters.gaussianBlur(classifierGaussianSigma))
-    ops.add(ImageOps.Threshold.threshold(thresholdValue))
 
     // Assign classification
     def classificationBelow
@@ -166,6 +175,11 @@ def autoThreshold(annotation, channel, thresholdDownsample, thresholdMethod, dar
     Map<Integer, PathClass> classifications = new LinkedHashMap<>()
     classifications.put(0, classificationBelow)
     classifications.put(1, classificationAbove)
+
+    // Define parameters for pixel classifier
+    List<ImageOp> ops = new ArrayList<>()
+    ops.add(ImageOps.Filters.gaussianBlur(classifierGaussianSigma))
+    ops.add(ImageOps.Threshold.threshold(thresholdValue))
 
     // Create pixel classifier
     def op = ImageOps.Core.sequential(ops)
