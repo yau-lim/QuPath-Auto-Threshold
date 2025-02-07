@@ -22,30 +22,30 @@ You can choose the desired output:
 */
 
 /* PARAMETERS */
-String channel = "DAB" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
-double thresholdDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
-def threshold = 0.25 // Input threshold value for fixed threshold. Use the following for auto threshold: "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
+String channel = "Average" // "HTX", "DAB", "Residual" for BF ; use channel name for FL ; "Average":Mean of all channels for BF/FL
+def threshold = 250 // Input threshold value for fixed threshold. Use the following for auto threshold: "Default", "Huang", "Intermodes", "IsoData", "IJ_IsoData", "Li", "MaxEntropy", "Mean", "MinError", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"
+double thresholdDownsample = 16 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
 boolean darkBackground = false // Adapt threshold method for dark backgrounds
 def thresholdFloor = null // Set a threshold floor value in case auto threshold is too low. Set null to disable
-String output = "preview" // "annotation", "detection", "measurement", "preview", "threshold value"
+String output = "annotation" // "annotation", "detection", "measurement", "preview", "threshold value"
 // Reset preview overlay with "getQuPath().getViewer().resetCustomPixelLayerOverlay()"
 
-double classifierDownsample = 8 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
-double classifierGaussianSigma = 0.5 // Strength of gaussian blurring for pixel classifier (not used in calculation of threshold)
-String classBelow = null // null or "Class Name"; use this for positive "Average" channel on brightfield
-String classAbove = "Positive" // null or "Class Name"; use this for positive deconvoluted or fluorescence channels
+double classifierDownsample = 16 // 1:Full, 2:Very high, 4:High, 8:Moderate, 16:Low, 32:Very low, 64:Extremely low
+double classifierGaussianSigma = 1.0 // Strength of gaussian blurring for pixel classifier (not used in calculation of threshold)
+String classBelow = "Tissue" // null or "Class Name"; use this for positive "Average" channel on brightfield
+String classAbove = null // null or "Class Name"; use this for positive deconvoluted or fluorescence channels
 
 /* Create object parameters */
-double minArea = 0 // Minimum area for annotations to be created
+double minArea = 10000 // Minimum area for annotations to be created
 double minHoleArea = 0 // Minimum area for holes in annotations to be created
-String classifierObjectOptions = "" // "SPLIT,DELETE_EXISTING,INCLUDE_IGNORED,SELECT_NEW"
+String classifierObjectOptions = "SPLIT,DELETE_EXISTING" // "SPLIT,DELETE_EXISTING,INCLUDE_IGNORED,SELECT_NEW"
 
 
 def annotations = getSelectedObjects().findAll{it.getPathClass() != getPathClass("Ignore*")}
 
 if (annotations) {
     annotations.forEach{ anno ->
-        autoThreshold(anno, channel, thresholdDownsample, threshold, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions)
+        autoThreshold(anno, channel, threshold, thresholdDownsample, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions)
     }
 } else {
     logger.warn("No annotations selected.")
@@ -66,9 +66,10 @@ import qupath.lib.gui.viewer.overlays.PixelClassificationOverlay
 import qupath.lib.images.servers.ColorTransforms.ColorTransform
 import qupath.opencv.ops.ImageOp
 import qupath.opencv.ops.ImageOps
+import qupath.lib.objects.classes.PathClass
 
 /* FUNCTIONS */
-def autoThreshold(annotation, channel, thresholdDownsample, threshold, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
+def autoThreshold(annotation, channel, threshold, thresholdDownsample, darkBackground, thresholdFloor, output, classifierDownsample, classifierGaussianSigma, classBelow, classAbove, minArea, minHoleArea, classifierObjectOptions) {
     def qupath = getQuPath()
     def imageData = getCurrentImageData()
     def imageType = imageData.getImageType()
@@ -149,7 +150,7 @@ def autoThreshold(annotation, channel, thresholdDownsample, threshold, darkBackg
     // If specified output is "threshold value, return threshold value in annotation measurements
     if (output == "threshold value") {
         logger.info("${thresholdMethod} threshold value: ${thresholdValue}")
-        annotation.measurements.put("${thresholdMethod} threshold value", thresholdValue)
+        annotation.measurements.put("${thresholdMethod} threshold value" as String, thresholdValue)
         return
     }
 
@@ -243,12 +244,12 @@ def autoThreshold(annotation, channel, thresholdDownsample, threshold, darkBackg
     }
     
     if (classificationBelow == null) {
-        annotation.measurements.put("${thresholdMethod}: ${classificationAbove.toString()} threshold value", thresholdValue)
+        annotation.measurements.put("${thresholdMethod}: ${classificationAbove.toString()} threshold value" as String, thresholdValue)
     }
     if (classificationAbove == null) {
-        annotation.measurements.put("${thresholdMethod}: ${classificationBelow.toString()} threshold value", thresholdValue)
+        annotation.measurements.put("${thresholdMethod}: ${classificationBelow.toString()} threshold value" as String, thresholdValue)
     }
     if (classificationBelow != null && classificationAbove != null) {
-        annotation.measurements.put("${thresholdMethod} threshold value", thresholdValue)
+        annotation.measurements.put("${thresholdMethod} threshold value" as String, thresholdValue)
     }
 }
